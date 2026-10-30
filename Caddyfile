@@ -1,8 +1,0 @@
-{$WISHLY_API_DOMAIN} {
-    encode zstd gzip
-    @api path /api/*
-    handle @api {
-        reverse_proxy api:8765
-    }
-    respond "Not found" 404
-}
