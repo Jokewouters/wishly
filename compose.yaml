@@ -1,0 +1,38 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      WISHLY_ENV: production
+      WISHLY_HTTPS: '1'
+      WISHLY_PUBLIC_HOST: ${WISHLY_API_DOMAIN:?Set WISHLY_API_DOMAIN}
+      WISHLY_FRONTEND_ORIGIN: ${WISHLY_FRONTEND_ORIGIN:?Set WISHLY_FRONTEND_ORIGIN}
+      WISHLY_DB: /data/wishly.sqlite3
+      WISHLY_ENABLE_IMPORT: '0'
+      WISHLY_ALLOW_REGISTRATION: ${WISHLY_ALLOW_REGISTRATION:-0}
+      HOST: 0.0.0.0
+      PORT: '8765'
+    volumes:
+      - ./data:/data
+    networks: [backend]
+    read_only: true
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ['80:80','443:443','443:443/udp']
+    environment:
+      WISHLY_API_DOMAIN: ${WISHLY_API_DOMAIN:?Set WISHLY_API_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    networks: [backend]
+networks:
+  backend:
+volumes:
+  caddy_data:
+  caddy_config:
