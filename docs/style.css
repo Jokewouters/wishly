@@ -41,3 +41,8 @@ body,#app,.shell{width:100%;max-width:100%;min-width:0;overflow-x:clip}
 .entry-choices{gap:6px}.entry-choice{min-width:0;overflow-wrap:anywhere}
 @media(max-width:375px){.sheet{padding-inline:14px}.field-row{grid-template-columns:1fr}.entry-choice{font-size:10px;padding:10px 3px}.tile-category,.tile-price{font-size:9px;padding:5px 6px}.gallery{gap:8px}.intro{margin-top:34px}}
 @media(min-width:650px){.shell{max-width:760px}.gallery{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+/* Reservering: lange privélinks moeten op mobiel kunnen afbreken. */
+.copy-link {overflow-wrap:anywhere;word-break:break-word;user-select:all;}
+.detail-actions {flex-wrap:wrap;}
+.detail-actions > button {max-width:100%;}

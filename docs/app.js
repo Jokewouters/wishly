@@ -6,6 +6,16 @@ const db = configured ? createClient(endpoint,publicKey,{auth:{persistSession:tr
 const app=document.querySelector('#app');const toast=document.querySelector('#toast');
 const ranges=[['Alles',()=>true],['< € 30',p=>p<30],['€ 30–100',p=>p>=30&&p<100],['€ 100–200',p=>p>=100&&p<=200],['> € 200',p=>p>200]];
 const categories=['Tech','Koken','Interieur','Kledij','Varia'];
+// Gastreserveringen: alleen een geheime code geeft recht op annuleren.
+// De code blijft uitsluitend op het toestel van de bezoeker staan.
+const reservationKey=id=>`wishly-reservation:${state.shareToken}:${id}`;
+function storedSecret(id){try{return localStorage.getItem(reservationKey(id))||''}catch{return ''}}
+function rememberSecret(id,secret){try{localStorage.setItem(reservationKey(id),secret);return true}catch{return false}}
+function forgetSecret(id){try{localStorage.removeItem(reservationKey(id))}catch{}}
+function newSecret(){const bytes=crypto.getRandomValues(new Uint8Array(32));return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('')}
+function cancellationUrl(id,secret){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('w',state.shareToken);url.searchParams.set('cancel',`${id}.${secret}`);return url.href}
+async function copyCancellationLink(url){try{await navigator.clipboard.writeText(url);alertUser('Persoonlijke annulatielink gekopieerd. Bewaar deze privé.')}catch{alertUser('Kopiëren is niet gelukt. Selecteer de link om hem zelf te bewaren.')}}
+
 const state={user:null,items:[],public:false,shareToken:null,filter:0,received:false,sort:'newest',modal:null,mode:'login'};
 const escapeHTML=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const eur=n=>new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(n);
@@ -30,7 +40,8 @@ async function api(path,data){if(!db)throw Error('Supabase is nog niet ingesteld
  if(path==='register'){const r=await db.auth.signUp({...data,options:{emailRedirectTo:location.origin+location.pathname}});check(r);return {ok:true,session:r.data.session}}
  if(path==='logout'){check(await db.auth.signOut());return {ok:true}}
  if(path==='items'){let r=check(await db.from('wishly_items').select('*').order('created_at',{ascending:false}));return {items:r}}
- if(path.startsWith('public/')&&path.endsWith('/reserve')){const token=path.split('/')[1];check(await db.rpc('wishly_reserve',{p_token:token,p_item:data.item_id,p_name:data.name}));return {ok:true}}
+ if(path.startsWith('public/')&&path.endsWith('/reserve')){const token=path.split('/')[1];check(await db.rpc('wishly_reserve_secure',{p_token:token,p_item:data.item_id,p_name:data.name,p_secret:data.secret}));return {ok:true}}
+ if(path.startsWith('public/')&&path.endsWith('/cancel')){const token=path.split('/')[1];const cancelled=check(await db.rpc('wishly_cancel_reservation',{p_token:token,p_item:data.item_id,p_secret:data.secret}));if(!cancelled)throw Error('Deze reservering kan niet worden geannuleerd. Misschien is de link ongeldig of werd het cadeau al vrijgegeven.');return {ok:true}}
  if(path.startsWith('public/')){const token=path.split('/')[1];const items=check(await db.rpc('wishly_public_items',{p_token:token}));return {items:items||[]}}
  if(path==='items/save'){
    const user=check(await db.auth.getUser()).user;if(!user)throw Error('Log opnieuw in.');
@@ -55,7 +66,7 @@ async function api(path,data){if(!db)throw Error('Supabase is nog niet ingesteld
  throw Error('Onbekende actie.');
 }
 function img(item,cls=''){if(safeUrl(item.image))return `<img class="${cls}" src="${escapeHTML(safeUrl(item.image))}" alt="${escapeHTML(item.title)}" loading="lazy" referrerpolicy="no-referrer">`;return `<div class="placeholder ${cls}" aria-label="Geen foto">✦</div>`}
-async function boot(){try{let token=new URL(location.href).searchParams.get('w') || '';if(token){state.public=true;state.shareToken=token;await reload();return}let me=await api('me');state.user=me.user;if(state.user)await reload();else render()}catch(e){alertUser(e.message);render()}}
+async function boot(){try{let token=new URL(location.href).searchParams.get('w') || '';if(token){state.public=true;state.shareToken=token;await reload();await handleCancellationLink();return}let me=await api('me');state.user=me.user;if(state.user)await reload();else render()}catch(e){alertUser(e.message);render()}}
 async function reload(){let data=state.public?await api('public/'+state.shareToken):await api('items');state.items=data.items;render()}
 function render(){
  if(!configured){app.innerHTML='<main class="auth"><div class="brand">wishly.</div><h1>Bijna klaar.</h1><p>Vul eerst je Supabase-projectgegevens in <code>docs/config.js</code> in en publiceer opnieuw.</p></main>';return} if(!state.user&&!state.public){renderAuth();return}
@@ -68,7 +79,7 @@ function render(){
  <nav class="filters" aria-label="Filter op prijs">${ranges.map(([label],i)=>`<button class="pill ${i===state.filter?'active':''}" data-filter="${i}" aria-pressed="${i===state.filter}">${escapeHTML(label)}</button>`).join('')}</nav>
  <div class="gallery-tools"><span class="item-count"><strong>${items.length}</strong> ${items.length===1?'wens':'wensen'}</span><label class="sort-wrap"><span class="sr-only">Sorteer cadeaus</span><select id="sortOrder" aria-label="Sorteer cadeaus"><option value="newest" ${state.sort==='newest'?'selected':''}>Recent toegevoegd</option><option value="low" ${state.sort==='low'?'selected':''}>Prijs: laag → hoog</option><option value="high" ${state.sort==='high'?'selected':''}>Prijs: hoog → laag</option></select></label></div>
  ${!publicMode?`<label class="received-filter"><input id="receivedToggle" type="checkbox" ${state.received?'checked':''}><span>Alleen gekregen cadeaus</span></label>`:''}
- <div class="gallery">${items.map(i=>`<button class="tile ${i.received?'received':''}" data-id="${i.id}" aria-label="Bekijk ${escapeHTML(i.title)}, ${eur(i.price)}">${img(i)}<span class="tile-category">${escapeHTML(i.category||'Varia')}</span><span class="tile-price">${eur(i.price)}</span>${i.received?'<span class="status">✓ Gekregen</span>':''}${publicMode&&i.reserved?'<span class="reserved-cover">Gereserveerd</span>':''}</button>`).join('')}</div>
+ <div class="gallery">${items.map(i=>`<button class="tile ${i.received?'received':''}" data-id="${i.id}" aria-label="Bekijk ${escapeHTML(i.title)}, ${eur(i.price)}">${img(i)}<span class="tile-category">${escapeHTML(i.category||'Varia')}</span><span class="tile-price">${eur(i.price)}</span>${i.received?'<span class="status">✓ Gekregen</span>':''}${publicMode&&i.reserved?`<span class="reserved-cover">${storedSecret(i.id)?'Door jou gereserveerd':'Gereserveerd'}</span>`:''}</button>`).join('')}</div>
  ${!items.length?`<div class="empty"><div class="empty-icon">${icon('gift')}</div><h2>Joke heeft geen inspiratie meer</h2><p>${state.received?'Nog geen gekregen cadeaus in deze prijsklasse.':'Even geduld nog'}</p>${!publicMode?'<button class="secondary" id="emptyAdd">Cadeau toevoegen</button>':''}</div>`:''}
  ${!publicMode?`<button class="fab" id="add" aria-label="Cadeau toevoegen">${icon('plus')}<span>Nieuw cadeau</span></button>`:''}
  </main>`;
@@ -124,12 +135,55 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal(document.
 function head(title){return `<div class="sheet-head"><h2>${title}</h2><button class="close" aria-label="Sluiten" data-close>×</button></div>`}
 function detail(item){
  const publicMode=state.public;
- const el=modal(`${head('Cadeaudetails')}<div class="detail-photo">${img(item,'hero')}</div><div class="detail-kicker">${escapeHTML(item.category||'Varia')}</div><div class="detail-heading"><h3 class="detail-title">${escapeHTML(item.title)}</h3><div class="price">${eur(item.price)}</div></div>${item.description?`<p class="description">${escapeHTML(item.description)}</p>`:''}${item.received?'<p class="detail-received">✓ Dit cadeau heb ik al gekregen</p>':''}<div class="buttons detail-actions">${item.shop_url?`<a class="primary" href="${escapeHTML(safeUrl(item.shop_url))}" target="_blank" rel="noopener noreferrer">Bekijk in webshop ${icon('arrow')}</a>`:''}${publicMode?item.received?'<button class="secondary" disabled>Reeds gekregen</button>':item.reserved?'<button class="secondary" disabled>Al gereserveerd</button>':'<button class="primary" id="reserve">Reserveer dit cadeau</button>':`<button class="secondary" id="edit">${icon('edit')} Bewerken</button>`}</div>`);
+ const el=modal(`${head('Cadeaudetails')}<div class="detail-photo">${img(item,'hero')}</div><div class="detail-kicker">${escapeHTML(item.category||'Varia')}</div><div class="detail-heading"><h3 class="detail-title">${escapeHTML(item.title)}</h3><div class="price">${eur(item.price)}</div></div>${item.description?`<p class="description">${escapeHTML(item.description)}</p>`:''}${item.received?'<p class="detail-received">✓ Dit cadeau heb ik al gekregen</p>':''}<div class="buttons detail-actions">${item.shop_url?`<a class="primary" href="${escapeHTML(safeUrl(item.shop_url))}" target="_blank" rel="noopener noreferrer">Bekijk in webshop ${icon('arrow')}</a>`:''}${publicMode?item.received?'<button class="secondary" disabled>Reeds gekregen</button>':item.reserved?(storedSecret(item.id)?'<button class="secondary" id="cancelReserve">Mijn reservering annuleren</button><button class="secondary" id="copyCancel">Annulatielink kopiëren</button>':'<button class="secondary" disabled>Al gereserveerd</button>'):'<button class="primary" id="reserve">Reserveer dit cadeau</button>':`<button class="secondary" id="edit">${icon('edit')} Bewerken</button>`}</div>`);
  if(publicMode&&!item.reserved&&!item.received)el.querySelector('#reserve').onclick=()=>{closeModal(el);reserve(item)};
+ if(publicMode&&item.reserved&&storedSecret(item.id)){
+   el.querySelector('#cancelReserve').onclick=()=>{closeModal(el);confirmCancel(item.id,storedSecret(item.id))};
+   el.querySelector('#copyCancel').onclick=()=>showCancellationLink(item.id,storedSecret(item.id));
+ }
  if(!publicMode)el.querySelector('#edit').onclick=()=>{closeModal(el);edit(item)}
 }
 
-function reserve(item){let el=modal(`${head('Cadeau reserveren')}<p class="description">${escapeHTML(item.title)} — ${eur(item.price)}</p><p class="form-hint">Je reservering is zichtbaar voor andere bezoekers, maar niet voor de eigenaar van de verlanglijst. Je naam wordt niet getoond.</p><form id="reservation"><div class="field"><label for="guest">Jouw naam</label><input id="guest" maxlength="80" minlength="2" required autocomplete="name" placeholder="Voornaam"></div><button class="primary" type="submit">Bevestig reservering</button></form>`);el.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await api('public/'+state.shareToken+'/reserve',{item_id:item.id,name:el.querySelector('#guest').value});closeModal(el);await reload();alertUser('Dit cadeau is gereserveerd. Dankjewel!')}catch(err){alertUser(err.message)}}}
+function showCancellationLink(id,secret){
+ const url=cancellationUrl(id,secret);
+ const el=modal(`${head('Bewaar je annulatielink')}<p class="description">Op hetzelfde toestel kun je later rechtstreeks annuleren. Met deze persoonlijke link lukt dat ook op een ander toestel.</p><div class="sharebox copy-link">${escapeHTML(url)}</div><div class="buttons"><button class="primary" id="copyCancelLink">Link kopiëren</button></div><p class="form-hint">Iedereen die deze link bezit kan deze reservering annuleren. Deel hem dus niet verder.</p>`);
+ el.querySelector('#copyCancelLink').onclick=()=>copyCancellationLink(url);
+}
+async function confirmCancel(id,secret){
+ if(!/^[a-f0-9]{64}$/.test(secret))return alertUser('Ongeldige annulatielink.');
+ const item=state.items.find(x=>x.id===id);
+ const el=modal(`${head('Reservering annuleren?')}<p class="description">${escapeHTML(item?.title||'Dit cadeau')} wordt opnieuw beschikbaar voor anderen.</p><div class="buttons"><button class="danger" id="confirmCancel">Ja, annuleren</button><button class="secondary" data-close>Behouden</button></div>`);
+ el.querySelector('#confirmCancel').onclick=async()=>{
+   const btn=el.querySelector('#confirmCancel');btn.disabled=true;
+   try{await api(`public/${state.shareToken}/cancel`,{item_id:id,secret});forgetSecret(id);const u=new URL(location.href);u.searchParams.delete('cancel');history.replaceState(null,'',u);closeModal(el);await reload();alertUser('Je reservering is geannuleerd. Het cadeau is opnieuw beschikbaar.')}
+   catch(e){alertUser(e.message)}finally{btn.disabled=false}
+ };
+}
+function reserve(item){
+ let el=modal(`${head('Cadeau reserveren')}<p class="description">${escapeHTML(item.title)} — ${eur(item.price)}</p><p class="form-hint">Andere bezoekers zien dat dit cadeau gereserveerd is, maar je naam blijft verborgen. Op dit toestel kun je je reservering later annuleren.</p><form id="reservation"><div class="field"><label for="guest">Jouw naam</label><input id="guest" maxlength="80" minlength="2" required autocomplete="name" placeholder="Voornaam"></div><button class="primary" type="submit">Bevestig reservering</button></form>`);
+ el.querySelector('form').onsubmit=async e=>{
+   e.preventDefault();const btn=el.querySelector('button[type=submit]');btn.disabled=true;
+   const secret=newSecret();
+   try{
+     await api(`public/${state.shareToken}/reserve`,{item_id:item.id,name:el.querySelector('#guest').value,secret});
+     const saved=rememberSecret(item.id,secret);closeModal(el);await reload();
+     alertUser('Dit cadeau is voor jou gereserveerd.');
+     // Ook bij geblokkeerde lokale opslag is de link beschikbaar.
+     showCancellationLink(item.id,secret);
+     if(!saved)alertUser('Bewaar de annulatielink: je browser laat lokale opslag niet toe.');
+   }catch(err){alertUser(err.message)}finally{btn.disabled=false}
+ };
+}
+async function handleCancellationLink(){
+ if(!state.public)return;
+ const raw=new URL(location.href).searchParams.get('cancel');if(!raw)return;
+ const match=raw.match(/^([a-f0-9-]{36})\.([a-f0-9]{64})$/i);
+ if(!match)return alertUser('Deze annulatielink is ongeldig.');
+ const [,id,secret]=match;const item=state.items.find(x=>x.id===id);
+ if(!item?.reserved){alertUser('Deze reservering bestaat niet meer.');return}
+ rememberSecret(id,secret);
+ confirmCancel(id,secret);
+}
 function edit(item={}){
  const editing=!!item.id;
  let image=item.image||'';
@@ -157,7 +211,7 @@ function showResetPassword(){
  const el=modal(`${head('Nieuw wachtwoord')}<p class="description">Kies een nieuw wachtwoord van minstens 10 tekens.</p><form id="resetForm"><div class="field"><label for="newpass">Nieuw wachtwoord</label><input id="newpass" type="password" minlength="10" autocomplete="new-password" required></div><button type="submit" class="primary">Wachtwoord bewaren</button></form>`);
  el.querySelector('#resetForm').onsubmit=async e=>{e.preventDefault();try{check(await db.auth.updateUser({password:el.querySelector('#newpass').value}));closeModal(el);alertUser('Je wachtwoord is aangepast.')}catch(err){alertUser(err.message)}};
 }
-function settings(){let el=modal(`${head('Instellingen')}<div class="section-title">Ingelogd als</div><p>${escapeHTML(state.user.email)}</p><p class="form-hint">Versie 2.1.0</p><button class="secondary logout" id="logout">Uitloggen</button>`);el.querySelector('#logout').onclick=async()=>{await api('logout',{});state.user=null;state.items=[];closeModal(el);render()}}
+function settings(){let el=modal(`${head('Instellingen')}<div class="section-title">Ingelogd als</div><p>${escapeHTML(state.user.email)}</p><p class="form-hint">Versie 2.2.0</p><button class="secondary logout" id="logout">Uitloggen</button>`);el.querySelector('#logout').onclick=async()=>{await api('logout',{});state.user=null;state.items=[];closeModal(el);render()}}
 db?.auth.onAuthStateChange((event)=>{if(event==='PASSWORD_RECOVERY')setTimeout(showResetPassword,0)});
 db?.auth.onAuthStateChange((event) => {
   if(event === 'SIGNED_IN' && !state.public && !state.user) {
