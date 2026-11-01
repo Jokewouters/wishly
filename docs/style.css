@@ -18,3 +18,26 @@ h1,h2,h3,.brand,.detail-title,.entry-intro h3{font-family:'Syne',sans-serif;font
 .tile-category,.tile-price{background:#fff;border:1px solid #c9c9c9;box-shadow:0 1px 6px #0002;font-weight:600}
 
 .forgot-wrap{text-align:center;margin:5px 0}.forgot-wrap .link{font-size:12px}
+
+/* Wishly 2.1: mobile-first overflow and tap targets */
+html{max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%}
+body,#app,.shell{width:100%;max-width:100%;min-width:0;overflow-x:clip}
+.shell{max-width:760px;padding-inline:clamp(12px,4vw,28px)}
+.top,.intro,.gallery-tools,.field,.field-row,.entry-choices,.import-panel,.input-with-action,.detail-heading,.buttons{min-width:0;max-width:100%}
+.top>div,.detail-heading>*{min-width:0}
+.gallery{min-width:0;grid-template-columns:repeat(2,minmax(0,1fr))}
+.gallery .tile{width:100%;min-width:0;min-height:0;max-width:100%;aspect-ratio:1/1;max-height:none}
+.tile img{object-fit:contain;width:100%;height:100%;max-width:100%}
+.tile-category,.tile-price{border:1px solid #b7b7b7;background:#fff;box-shadow:0 1px 6px #0002}
+.filters{width:100%;min-width:0;overscroll-behavior-x:contain}
+.sheet{max-width:100vw;min-width:0;overflow-x:hidden;overflow-wrap:anywhere}
+.sheet img,.detail-photo,.hero{max-width:100%}
+.detail-heading{flex-wrap:wrap}.detail-title{overflow-wrap:anywhere}
+.input-with-action{flex-wrap:wrap}.input-with-action input{flex:1 1 170px;min-width:0;max-width:100%}.input-with-action button{flex:0 0 auto}
+.field input:not([type=file]),.field textarea,.field select{max-width:100%;min-width:0;font-size:16px}
+.sharebox{overflow-wrap:anywhere}.buttons>*{min-width:0}.detail-actions a{overflow-wrap:anywhere}
+.auth{max-width:min(100%,430px);padding:clamp(16px,5vw,24px);margin:clamp(24px,10vh,80px) auto}
+.auth h1{font-size:clamp(30px,9vw,39px);overflow-wrap:anywhere}
+.entry-choices{gap:6px}.entry-choice{min-width:0;overflow-wrap:anywhere}
+@media(max-width:375px){.sheet{padding-inline:14px}.field-row{grid-template-columns:1fr}.entry-choice{font-size:10px;padding:10px 3px}.tile-category,.tile-price{font-size:9px;padding:5px 6px}.gallery{gap:8px}.intro{margin-top:34px}}
+@media(min-width:650px){.shell{max-width:760px}.gallery{grid-template-columns:repeat(3,minmax(0,1fr))}}

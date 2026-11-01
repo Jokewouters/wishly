@@ -12,12 +12,22 @@ const eur=n=>new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).fo
 const safeUrl=(url)=>{try{const x=new URL(String(url));return ['https:','http:'].includes(x.protocol)?x.href:''}catch{return ''}};
 function alertUser(t){toast.textContent=t;toast.style.display='block';clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>toast.style.display='none',4500)}
 const check=(result)=>{if(result.error)throw Error(result.error.message||'Er liep iets mis.');return result.data};
-async function myProfile(){const user=check(await db.auth.getUser()).user;if(!user)return null;let p=check(await db.from('wishly_profiles').select('share_token').eq('user_id',user.id).single());return {id:user.id,email:user.email,share_token:p.share_token}}
+async function myProfile(){
+ const {data:sessionData,error:sessionError}=await db.auth.getSession();
+ if(sessionError)throw sessionError;
+ if(!sessionData?.session)return null;
+ const {data:userData,error:userError}=await db.auth.getUser();
+ if(userError)throw userError;
+ const user=userData?.user;
+ if(!user)return null;
+ const p=check(await db.from('wishly_profiles').select('share_token').eq('user_id',user.id).single());
+ return {id:user.id,email:user.email,share_token:p.share_token};
+}
 async function uploadImage(data,ownerId){if(!data?.startsWith('data:'))return data||'';const m=data.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.*)$/s);if(!m)throw Error('Ongeldig afbeeldingsformaat.');let bytes=Uint8Array.from(atob(m[2]),c=>c.charCodeAt(0));if(bytes.length>3145728)throw Error('Foto is groter dan 3 MB.');const suffix=({ 'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif' })[m[1]];const path=`${ownerId}/${crypto.randomUUID()}.${suffix}`;check(await db.storage.from('wishly-images').upload(path,new Blob([bytes],{type:m[1]}),{contentType:m[1],upsert:false}));return db.storage.from('wishly-images').getPublicUrl(path).data.publicUrl}
 async function api(path,data){if(!db)throw Error('Supabase is nog niet ingesteld. Vul docs/config.js in.');
  if(path==='me')return {user:await myProfile()};
- if(path==='login'){check(await db.auth.signInWithPassword(data));return {ok:true}}
- if(path==='register'){check(await db.auth.signUp(data));return {ok:true}}
+ if(path==='login'){const r=await db.auth.signInWithPassword(data);check(r);return {ok:true,session:r.data.session}}
+ if(path==='register'){const r=await db.auth.signUp({...data,options:{emailRedirectTo:location.origin+location.pathname}});check(r);return {ok:true,session:r.data.session}}
  if(path==='logout'){check(await db.auth.signOut());return {ok:true}}
  if(path==='items'){let r=check(await db.from('wishly_items').select('*').order('created_at',{ascending:false}));return {items:r}}
  if(path.startsWith('public/')&&path.endsWith('/reserve')){const token=path.split('/')[1];check(await db.rpc('wishly_reserve',{p_token:token,p_item:data.item_id,p_name:data.name}));return {ok:true}}
@@ -31,7 +41,17 @@ async function api(path,data){if(!db)throw Error('Supabase is nog niet ingesteld
    else check(await db.from('wishly_items').insert({...value,user_id:user.id}));return {ok:true};
  }
  if(path==='items/delete'){const user=check(await db.auth.getUser()).user;if(!user)throw Error('Log opnieuw in.');check(await db.from('wishly_items').delete().eq('id',data.id).eq('user_id',user.id));return {ok:true}}
- if(path==='metadata'){let r=await db.functions.invoke('product-metadata',{body:{url:data.url}});if(r.error)throw Error('Automatisch ophalen lukte niet. Vul de gegevens handmatig in.');return r.data}
+ if(path==='metadata'){
+   const r=await db.functions.invoke('product-metadata',{body:{url:data.url}});
+   if(r.error){
+     let details=null;
+     try{details=await r.error.context?.json()}catch{}
+     const message=details?.error || 'Automatisch ophalen is momenteel niet beschikbaar. Controleer of de Supabase Edge Function product-metadata gepubliceerd is.';
+     throw Error(message);
+   }
+   if(r.data?.error)throw Error(r.data.error);
+   return r.data;
+ }
  throw Error('Onbekende actie.');
 }
 function img(item,cls=''){if(safeUrl(item.image))return `<img class="${cls}" src="${escapeHTML(safeUrl(item.image))}" alt="${escapeHTML(item.title)}" loading="lazy" referrerpolicy="no-referrer">`;return `<div class="placeholder ${cls}" aria-label="Geen foto">✦</div>`}
@@ -44,12 +64,12 @@ function render(){
  items.sort((a,b)=>state.sort==='low'?a.price-b.price:state.sort==='high'?b.price-a.price:new Date(b.created_at)-new Date(a.created_at));
  app.innerHTML=`<main class="shell">
  <header class="top"><div><div class="eyebrow">${publicMode?'VERLANGLIJST':'JOUW PERSOONLIJKE LIJST'}</div><div class="brand">wishly<span>.</span></div></div><div class="small-actions">${publicMode?'':`<button class="iconbtn" id="share" title="Delen" aria-label="Verlanglijst delen">${icon('share')}</button><button class="iconbtn" id="settings" title="Instellingen" aria-label="Instellingen">${icon('menu')}</button>`}</div></header>
- <section class="intro"><h1>${publicMode?'Cadeauwensen.':'Mijn wensen.'}</h1><p>${publicMode?'Een paar dingen om iemand blij mee te maken.':'Alles wat op mijn verlanglijst staat, op één plek.'}</p></section>
+ <section class="intro"><h1>${'Cadeau inspiratie'}</h1><p>${publicMode?'Een paar dingen om Joke blij mee te maken':"Joke's verlanglijstje"}</p></section>
  <nav class="filters" aria-label="Filter op prijs">${ranges.map(([label],i)=>`<button class="pill ${i===state.filter?'active':''}" data-filter="${i}" aria-pressed="${i===state.filter}">${escapeHTML(label)}</button>`).join('')}</nav>
  <div class="gallery-tools"><span class="item-count"><strong>${items.length}</strong> ${items.length===1?'wens':'wensen'}</span><label class="sort-wrap"><span class="sr-only">Sorteer cadeaus</span><select id="sortOrder" aria-label="Sorteer cadeaus"><option value="newest" ${state.sort==='newest'?'selected':''}>Recent toegevoegd</option><option value="low" ${state.sort==='low'?'selected':''}>Prijs: laag → hoog</option><option value="high" ${state.sort==='high'?'selected':''}>Prijs: hoog → laag</option></select></label></div>
  ${!publicMode?`<label class="received-filter"><input id="receivedToggle" type="checkbox" ${state.received?'checked':''}><span>Alleen gekregen cadeaus</span></label>`:''}
  <div class="gallery">${items.map(i=>`<button class="tile ${i.received?'received':''}" data-id="${i.id}" aria-label="Bekijk ${escapeHTML(i.title)}, ${eur(i.price)}">${img(i)}<span class="tile-category">${escapeHTML(i.category||'Varia')}</span><span class="tile-price">${eur(i.price)}</span>${i.received?'<span class="status">✓ Gekregen</span>':''}${publicMode&&i.reserved?'<span class="reserved-cover">Gereserveerd</span>':''}</button>`).join('')}</div>
- ${!items.length?`<div class="empty"><div class="empty-icon">${icon('gift')}</div><h2>Hier staat nog niets.</h2><p>${state.received?'Nog geen gekregen cadeaus in deze prijsklasse.':publicMode?'Geen cadeaus binnen deze prijsklasse.':'Verander je filter of voeg een cadeau toe.'}</p>${!publicMode?'<button class="secondary" id="emptyAdd">Cadeau toevoegen</button>':''}</div>`:''}
+ ${!items.length?`<div class="empty"><div class="empty-icon">${icon('gift')}</div><h2>Joke heeft geen inspiratie meer</h2><p>${state.received?'Nog geen gekregen cadeaus in deze prijsklasse.':'Even geduld nog'}</p>${!publicMode?'<button class="secondary" id="emptyAdd">Cadeau toevoegen</button>':''}</div>`:''}
  ${!publicMode?`<button class="fab" id="add" aria-label="Cadeau toevoegen">${icon('plus')}<span>Nieuw cadeau</span></button>`:''}
  </main>`;
  app.querySelector('#sortOrder').onchange=e=>{state.sort=e.target.value;render()};
@@ -59,7 +79,45 @@ function render(){
 }
 function icon(name){const paths={share:'<path d="M12 16V3m0 0L7 8m5-5 5 5"/><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',menu:'<path d="M4 7h16M4 12h16M4 17h16"/>',plus:'<path d="M12 5v14M5 12h14"/>',gift:'<rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8H8a2.5 2.5 0 1 1 2.5-2.5L12 8Zm0 0h4a2.5 2.5 0 1 0-2.5-2.5L12 8Z"/>',arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>',link:'<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',edit:'<path d="m15 5 4 4M4 20l4.5-1 11-11a2.12 2.12 0 0 0-3-3l-11 11L4 20Z"/>'};return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.gift}</svg>`}
 
-function renderAuth(){app.innerHTML=`<main class="auth"><div class="brand">wishly<span>.</span></div><h1>${state.mode==='login'?'Welkom terug.':'Maak je lijstje.'}</h1><p>Bewaar al je cadeau-ideeën op één mooie plek.</p><form id="authForm"><div class="field"><label for="email">E-mailadres</label><input id="email" name="email" type="email" autocomplete="email" required></div><div class="field"><label for="password">Wachtwoord</label><input id="password" name="password" type="password" minlength="${state.mode==='register'?10:1}" autocomplete="${state.mode==='register'?'new-password':'current-password'}" required></div><button class="primary" type="submit">${state.mode==='login'?'Inloggen':'Account aanmaken'}</button></form><p style="font-size:13px;text-align:center">${state.mode==='login'?'Nog geen account?':'Heb je al een account?'} <button id="mode" class="link">${state.mode==='login'?'Registreren':'Inloggen'}</button></p>${state.mode==='login'?'<p class="forgot-wrap"><button id="forgot" class="link">Wachtwoord vergeten?</button></p>':''}</main>`;document.querySelector('#mode').onclick=()=>{state.mode=state.mode==='login'?'register':'login';renderAuth()};if(state.mode==='login')document.querySelector('#forgot').onclick=async()=>{const email=prompt('Welk e-mailadres gebruik je voor Wishly?');if(!email)return;try{check(await db.auth.resetPasswordForEmail(email.trim(),{redirectTo:location.origin+location.pathname}));alertUser('Als het e-mailadres bestaat, ontvang je instructies.')}catch(err){alertUser(err.message)}};document.querySelector('#authForm').onsubmit=async e=>{e.preventDefault();let b=e.target.querySelector('button');b.disabled=true;try{await api(state.mode, {email:e.target.email.value,password:e.target.password.value});state.user=(await api('me')).user;if(state.user)await reload();else {state.mode='login';renderAuth();alertUser('Controleer je e-mail en bevestig je account.')}}catch(err){alertUser(err.message)}finally{b.disabled=false}}}
+function authError(err){
+ const msg=String(err?.message||'').toLowerCase();
+ if(msg.includes('invalid login credentials'))return 'E-mailadres of wachtwoord is niet correct.';
+ if(msg.includes('email not confirmed'))return 'Bevestig eerst je e-mailadres via de link die je per mail ontvangen hebt.';
+ if(msg.includes('rate limit')||msg.includes('too many requests')||msg.includes('over_email_send_rate_limit'))return 'Je hebt te vaak geprobeerd. Probeer het later opnieuw.';
+ if(msg.includes('user already registered'))return 'Er bestaat al een account met dit e-mailadres. Probeer in te loggen.';
+ if(msg.includes('password should be')||msg.includes('weak password'))return 'Kies een sterker wachtwoord van minstens 10 tekens.';
+ if(msg.includes('failed to fetch')||msg.includes('network'))return 'Verbinding mislukt. Controleer je internetverbinding en probeer opnieuw.';
+ return err?.message||'Er liep iets mis. Probeer het opnieuw.';
+}
+function showConfirmation(email){
+ app.innerHTML=`<main class="auth"><div class="brand">wishly<span>.</span></div><h1>Controleer je mailbox.</h1><p>We hebben een activatiemail verstuurd naar <strong>${escapeHTML(email)}</strong>.</p><p>Klik op de link in die e-mail om je account te bevestigen. Kijk ook even in je spamfolder.</p><div class="buttons"><button type="button" class="primary" id="backToLogin">Naar inloggen</button></div></main>`;
+ app.querySelector('#backToLogin').onclick=()=>{state.mode='login';renderAuth();};
+}
+function renderAuth(){
+ app.innerHTML=`<main class="auth"><div class="brand">wishly<span>.</span></div><h1>${state.mode==='login'?'Welkom terug.':'Maak je lijstje.'}</h1><p>Bewaar al je cadeau-ideeën op één mooie plek.</p><p id="authMessage" role="status" aria-live="polite" hidden></p><form id="authForm"><div class="field"><label for="email">E-mailadres</label><input id="email" name="email" type="email" autocomplete="email" required></div><div class="field"><label for="password">Wachtwoord</label><input id="password" name="password" type="password" minlength="${state.mode==='register'?10:1}" autocomplete="${state.mode==='register'?'new-password':'current-password'}" required></div><button class="primary" type="submit">${state.mode==='login'?'Inloggen':'Account aanmaken'}</button></form><p style="font-size:13px;text-align:center">${state.mode==='login'?'Nog geen account?':'Heb je al een account?'} <button id="mode" class="link">${state.mode==='login'?'Registreren':'Inloggen'}</button></p>${state.mode==='login'?'<p class="forgot-wrap"><button id="forgot" class="link">Wachtwoord vergeten?</button></p>':''}</main>`;
+ const message=app.querySelector('#authMessage');
+ const say=t=>{message.textContent=t;message.hidden=false;};
+ app.querySelector('#mode').onclick=()=>{state.mode=state.mode==='login'?'register':'login';renderAuth()};
+ if(state.mode==='login')app.querySelector('#forgot').onclick=async()=>{
+  const email=prompt('Welk e-mailadres gebruik je voor Wishly?');if(!email)return;
+  try{check(await db.auth.resetPasswordForEmail(email.trim(),{redirectTo:location.origin+location.pathname}));say('Als er een account bestaat voor dit e-mailadres, ontvang je een mail om je wachtwoord te herstellen. Kijk ook in je spamfolder.')}catch(err){say(authError(err))}
+ };
+ app.querySelector('#authForm').onsubmit=async e=>{
+  e.preventDefault();const form=e.currentTarget;const b=form.querySelector('button[type=submit]');
+  const email=form.elements.email.value.trim();const password=form.elements.password.value;
+  b.disabled=true;
+  try{
+   const result=await api(state.mode,{email,password});
+   if(state.mode==='register'&&!result.session){showConfirmation(email);return;}
+   state.user=(await api('me')).user;
+   if(state.user){await reload();return;}
+   if(state.mode==='register'){showConfirmation(email);return;}
+   say('Je bent nog niet aangemeld. Controleer of je je e-mailadres hebt bevestigd.');
+  }catch(err){say(authError(err))}
+  finally{b.disabled=false;}
+ };
+}
+
 function modal(content){document.querySelector('.modal-bg')?.remove();document.body.classList.add('dialog-open');let el=document.createElement('div');el.className='modal-bg';el.innerHTML=`<div class="sheet" role="dialog" aria-modal="true">${content}</div>`;el.addEventListener('click',e=>{if(e.target===el)closeModal(el)});document.body.append(el);el.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal(el));el.querySelector('[data-close]')?.focus({preventScroll:true});return el}
 function closeModal(el){el?.remove();if(!document.querySelector('.modal-bg'))document.body.classList.remove('dialog-open')}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal(document.querySelector('.modal-bg'))});
@@ -67,7 +125,7 @@ function head(title){return `<div class="sheet-head"><h2>${title}</h2><button cl
 function detail(item){
  const publicMode=state.public;
  const el=modal(`${head('Cadeaudetails')}<div class="detail-photo">${img(item,'hero')}</div><div class="detail-kicker">${escapeHTML(item.category||'Varia')}</div><div class="detail-heading"><h3 class="detail-title">${escapeHTML(item.title)}</h3><div class="price">${eur(item.price)}</div></div>${item.description?`<p class="description">${escapeHTML(item.description)}</p>`:''}${item.received?'<p class="detail-received">✓ Dit cadeau heb ik al gekregen</p>':''}<div class="buttons detail-actions">${item.shop_url?`<a class="primary" href="${escapeHTML(safeUrl(item.shop_url))}" target="_blank" rel="noopener noreferrer">Bekijk in webshop ${icon('arrow')}</a>`:''}${publicMode?item.received?'<button class="secondary" disabled>Reeds gekregen</button>':item.reserved?'<button class="secondary" disabled>Al gereserveerd</button>':'<button class="primary" id="reserve">Reserveer dit cadeau</button>':`<button class="secondary" id="edit">${icon('edit')} Bewerken</button>`}</div>`);
- if(publicMode&&!item.reserved)el.querySelector('#reserve').onclick=()=>{closeModal(el);reserve(item)};
+ if(publicMode&&!item.reserved&&!item.received)el.querySelector('#reserve').onclick=()=>{closeModal(el);reserve(item)};
  if(!publicMode)el.querySelector('#edit').onclick=()=>{closeModal(el);edit(item)}
 }
 
@@ -77,7 +135,7 @@ function edit(item={}){
  let image=item.image||'';
  const el=modal(`${head(editing?'Cadeau bewerken':'Cadeau toevoegen')}
  ${!editing?`<div class="entry-intro"><h3>Waar begint je wens?</h3><p>Plak een link, kies een foto of vul alles zelf in.</p></div><div class="entry-choices"><button class="entry-choice selected" type="button" data-method="link">${icon('link')}<span>Webshoplink</span></button><button class="entry-choice" type="button" data-method="photo">${icon('image')}<span>Foto</span></button><button class="entry-choice" type="button" data-method="manual">${icon('edit')}<span>Zelf invullen</span></button></div>`:''}
- <form id="itemForm"><div class="import-panel"><div class="field" id="linkField"><label for="shop_url">Link naar de webshop</label><div class="input-with-action"><input type="url" id="shop_url" placeholder="https://webshop.be/product" value="${escapeHTML(item.shop_url||'')}"><button id="fetchmeta" type="button" class="secondary">Ophalen</button></div><p class="form-hint">Automatisch ophalen werkt bij ondersteunde webshops nadat de optionele Edge Function is gepubliceerd.</p></div><div class="field" id="photoField"><label for="upload">Productfoto of screenshot</label><label class="upload-zone" for="upload">${icon('image')}<span>Foto kiezen</span><small>JPG, PNG of WebP · max. 3 MB</small></label><input id="upload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="sr-only"><div id="imagePreview">${item.image?img(item,'preview'):''}</div></div></div>
+ <form id="itemForm"><div class="import-panel"><div class="field" id="linkField"><label for="shop_url">Link naar de webshop</label><div class="input-with-action"><input type="url" id="shop_url" placeholder="https://webshop.be/product" value="${escapeHTML(item.shop_url||'')}"><button id="fetchmeta" type="button" class="secondary">Ophalen</button></div><p class="form-hint">Plak een productlink en tik op Ophalen. Sommige webshops blokkeren automatisch uitlezen; je kunt dan handmatig verder.</p></div><div class="field" id="photoField"><label for="upload">Productfoto of screenshot</label><label class="upload-zone" for="upload">${icon('image')}<span>Foto kiezen</span><small>JPG, PNG of WebP · max. 3 MB</small></label><input id="upload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="sr-only"><div id="imagePreview">${item.image?img(item,'preview'):''}</div></div></div>
  <div class="form-divider"><span>CADEAUGEGEVENS</span></div>
  <div class="field"><label for="title">Naam <span class="required">*</span></label><input id="title" required maxlength="150" placeholder="Welk cadeau wil je?" value="${escapeHTML(item.title||'')}"></div>
  <div class="field-row"><div class="field"><label for="price">Prijs (€) <span class="required">*</span></label><input type="number" id="price" required min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="0,00" value="${item.price??''}"></div><div class="field"><label for="category">Categorie</label><select id="category" required>${categories.map(c=>`<option value="${c}" ${c===(categories.includes(item.category)?item.category:'Varia')?'selected':''}>${c}</option>`).join('')}</select></div></div>
@@ -88,19 +146,24 @@ function edit(item={}){
  function selectMethod(method){methods.forEach(b=>b.classList.toggle('selected',b.dataset.method===method));el.querySelector('#linkField').hidden=method==='photo'||method==='manual';el.querySelector('#photoField').hidden=method==='link'||method==='manual';if(method==='manual')el.querySelector('#title').focus({preventScroll:true})}
  methods.forEach(b=>b.onclick=()=>selectMethod(b.dataset.method));
  if(!editing)selectMethod('link');else {el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false}
- el.querySelector('#fetchmeta').onclick=async()=>{const url=el.querySelector('#shop_url').value;if(!url)return alertUser('Plak eerst een webshoplink.');const btn=el.querySelector('#fetchmeta');btn.disabled=true;btn.textContent='Ophalen…';try{const meta=await api('metadata',{url});if(meta.title)el.querySelector('#title').value=meta.title;if(meta.description)el.querySelector('#description').value=meta.description;if(meta.price!==null&&meta.price!==undefined)el.querySelector('#price').value=meta.price;if(meta.image){image=meta.image;el.querySelector('#imagePreview').innerHTML=`<img src="${escapeHTML(image)}" class="preview" alt="Productfoto">`}el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false;alertUser('Gegevens opgehaald. Controleer ze even.')}catch(err){el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false;alertUser(err.message)}finally{btn.disabled=false;btn.textContent='Ophalen'}};
+ el.querySelector('#fetchmeta').onclick=async()=>{const url=el.querySelector('#shop_url').value;if(!safeUrl(url))return alertUser('Plak eerst een geldige webshoplink (https://…).');const btn=el.querySelector('#fetchmeta');btn.disabled=true;btn.textContent='Ophalen…';try{const meta=await api('metadata',{url});if(meta.title)el.querySelector('#title').value=meta.title;if(meta.description)el.querySelector('#description').value=meta.description;if(meta.price!==null&&meta.price!==undefined)el.querySelector('#price').value=meta.price;if(meta.image){image=safeUrl(meta.image); el.querySelector('#imagePreview').innerHTML=`<img src="${escapeHTML(image)}" class="preview" alt="Productfoto">`}el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false;alertUser('Productgegevens ingevuld. Controleer de prijs en foto nog even.')}catch(err){el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false;alertUser(err.message)}finally{btn.disabled=false;btn.textContent='Ophalen'}};
  el.querySelector('#upload').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)||file.size>3_000_000)return alertUser('Gebruik een afbeelding van maximaal 3 MB.');image=await new Promise((ok,fail)=>{let reader=new FileReader();reader.onload=()=>ok(reader.result);reader.onerror=fail;reader.readAsDataURL(file)});el.querySelector('#imagePreview').innerHTML=`<img src="${image}" class="preview" alt="Foto van cadeau">`};
  el.querySelector('#itemForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('items/save',{id:item.id,title:el.querySelector('#title').value,description:el.querySelector('#description').value,price:el.querySelector('#price').value,category:el.querySelector('#category').value,shop_url:el.querySelector('#shop_url').value,image,received:!!el.querySelector('#received')?.checked});closeModal(el);await reload();alertUser('Cadeau bewaard!')}catch(err){alertUser(err.message)}finally{b.disabled=false}};
  if(editing)el.querySelector('#delete').onclick=async()=>{if(!confirm('Dit cadeau definitief verwijderen?'))return;try{await api('items/delete',{id:item.id});closeModal(el);await reload();alertUser('Cadeau verwijderd')}catch(err){alertUser(err.message)}}
 }
 
-function share(){let url=new URL(location.href);url.search='';url.searchParams.set('w',state.user.share_token);url=url.href;let el=modal(`${head('Deel je verlanglijst')}<p class="description">Deel deze geheime link met vrienden of familie. Ze kunnen cadeaus reserveren zonder dat jij dat ziet.</p><div class="sharebox">${escapeHTML(url)}</div><div class="buttons"><button class="primary" id="copy">Kopieer link</button>${navigator.share?'<button class="secondary" id="shareNative">Delen ↗</button>':''}</div><p class="form-hint">Iedereen met deze link kan je verlanglijst bekijken. Bewaar of deel hem alleen met mensen die je vertrouwt.</p>`);el.querySelector('#copy').onclick=async()=>{try{await navigator.clipboard.writeText(url);alertUser('Link gekopieerd!')}catch{alertUser('Kopiëren mislukt. Selecteer de link handmatig.')}};if(el.querySelector('#shareNative'))el.querySelector('#shareNative').onclick=()=>navigator.share({title:'Mijn wensen',url}).catch(()=>{})}
+function share(){let url=new URL(location.href);url.search='';url.searchParams.set('w',state.user.share_token);url=url.href;let el=modal(`${head('Deel je verlanglijst')}<p class="description">Deel deze geheime link met vrienden of familie. Ze kunnen cadeaus reserveren zonder dat jij dat ziet.</p><div class="sharebox">${escapeHTML(url)}</div><div class="buttons"><button class="primary" id="copy">Kopieer link</button>${navigator.share?'<button class="secondary" id="shareNative">Delen ↗</button>':''}</div><p class="form-hint">Iedereen met deze link kan je verlanglijst bekijken. Bewaar of deel hem alleen met mensen die je vertrouwt.</p>`);el.querySelector('#copy').onclick=async()=>{try{await navigator.clipboard.writeText(url);alertUser('Link gekopieerd!')}catch{alertUser('Kopiëren mislukt. Selecteer de link handmatig.')}};if(el.querySelector('#shareNative'))el.querySelector('#shareNative').onclick=()=>navigator.share({title:'Cadeau inspiratie',url}).catch(()=>{})}
 function showResetPassword(){
  const el=modal(`${head('Nieuw wachtwoord')}<p class="description">Kies een nieuw wachtwoord van minstens 10 tekens.</p><form id="resetForm"><div class="field"><label for="newpass">Nieuw wachtwoord</label><input id="newpass" type="password" minlength="10" autocomplete="new-password" required></div><button type="submit" class="primary">Wachtwoord bewaren</button></form>`);
  el.querySelector('#resetForm').onsubmit=async e=>{e.preventDefault();try{check(await db.auth.updateUser({password:el.querySelector('#newpass').value}));closeModal(el);alertUser('Je wachtwoord is aangepast.')}catch(err){alertUser(err.message)}};
 }
-function settings(){let el=modal(`${head('Instellingen')}<div class="section-title">Ingelogd als</div><p>${escapeHTML(state.user.email)}</p><p class="form-hint">Versie 2.0.0</p><button class="secondary logout" id="logout">Uitloggen</button>`);el.querySelector('#logout').onclick=async()=>{await api('logout',{});state.user=null;state.items=[];closeModal(el);render()}}
+function settings(){let el=modal(`${head('Instellingen')}<div class="section-title">Ingelogd als</div><p>${escapeHTML(state.user.email)}</p><p class="form-hint">Versie 2.1.0</p><button class="secondary logout" id="logout">Uitloggen</button>`);el.querySelector('#logout').onclick=async()=>{await api('logout',{});state.user=null;state.items=[];closeModal(el);render()}}
 db?.auth.onAuthStateChange((event)=>{if(event==='PASSWORD_RECOVERY')setTimeout(showResetPassword,0)});
+db?.auth.onAuthStateChange((event) => {
+  if(event === 'SIGNED_IN' && !state.public && !state.user) {
+    setTimeout(() => boot(), 0);
+  }
+});
 boot(); // Geen serviceworker: GitHub Pages haalt updates rechtstreeks op.
 
 // Remove obsolete offline shell to prevent old versions from persisting.
