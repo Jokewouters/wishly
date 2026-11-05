@@ -1,1 +1,1 @@
-# Wishly 2.0
+# Wishly 2.5
