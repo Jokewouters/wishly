@@ -16,7 +16,7 @@ function newSecret(){const bytes=crypto.getRandomValues(new Uint8Array(32));retu
 function cancellationUrl(id,secret){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('w',state.shareToken);url.searchParams.set('cancel',`${id}.${secret}`);return url.href}
 async function copyCancellationLink(url){try{await navigator.clipboard.writeText(url);alertUser('Persoonlijke annulatielink gekopieerd. Bewaar deze privé.')}catch{alertUser('Kopiëren is niet gelukt. Selecteer de link om hem zelf te bewaren.')}}
 
-const state={user:null,items:[],public:false,shareToken:null,filter:0,received:false,sort:'newest',modal:null,mode:'login'};
+const state={user:null,items:[],public:false,shareToken:null,filter:0,received:false,category:'Alles',sort:'newest',modal:null,mode:'login'};
 const escapeHTML=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const eur=n=>new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR'}).format(n);
 const safeUrl=(url)=>{try{const x=new URL(String(url));return ['https:','http:'].includes(x.protocol)?x.href:''}catch{return ''}};
@@ -46,7 +46,7 @@ async function api(path,data){if(!db)throw Error('Supabase is nog niet ingesteld
  if(path==='items/save'){
    const user=check(await db.auth.getUser()).user;if(!user)throw Error('Log opnieuw in.');
    let image=await uploadImage(data.image||'',user.id);
-   let value={title:data.title.trim(),description:data.description.trim(),price:Number(data.price),category:data.category,shop_url:safeUrl(data.shop_url),image:safeUrl(image),received:!!data.received};
+   let value={title:data.title.trim(),description:data.description.trim(),price:Number(data.price),category:data.category,shop_url:safeUrl(data.shop_url),image:safeUrl(image),received:!!data.received,is_private:!!data.is_private};
    if(!value.title||!Number.isFinite(value.price)||value.price<0||!categories.includes(value.category))throw Error('Controleer naam, prijs en categorie.');
    if(data.id){check(await db.from('wishly_items').update(value).eq('id',data.id).eq('user_id',user.id))}
    else check(await db.from('wishly_items').insert({...value,user_id:user.id}));return {ok:true};
@@ -71,18 +71,20 @@ async function reload(){let data=state.public?await api('public/'+state.shareTok
 function render(){
  if(!configured){app.innerHTML='<main class="auth"><div class="brand">wishly.</div><h1>Bijna klaar.</h1><p>Vul eerst je Supabase-projectgegevens in <code>docs/config.js</code> in en publiceer opnieuw.</p></main>';return} if(!state.user&&!state.public){renderAuth();return}
  const publicMode=state.public;
- const items=state.items.filter(i=>ranges[state.filter][1](Number(i.price))&&(!state.received||i.received));
+ const items=state.items.filter(i=>ranges[state.filter][1](Number(i.price))&&(!state.received||i.received)&&(state.category==='Alles'||i.category===state.category));
  items.sort((a,b)=>state.sort==='low'?a.price-b.price:state.sort==='high'?b.price-a.price:new Date(b.created_at)-new Date(a.created_at));
  app.innerHTML=`<main class="shell">
  <header class="top"><div><div class="eyebrow">${publicMode?'VERLANGLIJST':'JOUW PERSOONLIJKE LIJST'}</div><div class="brand">wishly<span>.</span></div></div><div class="small-actions">${publicMode?'':`<button class="iconbtn" id="share" title="Delen" aria-label="Verlanglijst delen">${icon('share')}</button><button class="iconbtn" id="settings" title="Instellingen" aria-label="Instellingen">${icon('menu')}</button>`}</div></header>
  <section class="intro"><h1>${'Cadeau inspiratie'}</h1><p>${publicMode?'Een paar dingen om Joke blij mee te maken':"Joke's verlanglijstje"}</p></section>
  <nav class="filters" aria-label="Filter op prijs">${ranges.map(([label],i)=>`<button class="pill ${i===state.filter?'active':''}" data-filter="${i}" aria-pressed="${i===state.filter}">${escapeHTML(label)}</button>`).join('')}</nav>
+ <div class="category-tools"><label for="categoryFilter">Categorie</label><select id="categoryFilter" aria-label="Filter op categorie"><option value="Alles">Alle categorieën</option>${categories.map(c=>`<option value="${c}" ${state.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
  <div class="gallery-tools"><span class="item-count"><strong>${items.length}</strong> ${items.length===1?'wens':'wensen'}</span><label class="sort-wrap"><span class="sr-only">Sorteer cadeaus</span><select id="sortOrder" aria-label="Sorteer cadeaus"><option value="newest" ${state.sort==='newest'?'selected':''}>Recent toegevoegd</option><option value="low" ${state.sort==='low'?'selected':''}>Prijs: laag → hoog</option><option value="high" ${state.sort==='high'?'selected':''}>Prijs: hoog → laag</option></select></label></div>
  ${!publicMode?`<label class="received-filter"><input id="receivedToggle" type="checkbox" ${state.received?'checked':''}><span>Alleen gekregen cadeaus</span></label>`:''}
- <div class="gallery">${items.map(i=>`<button class="tile ${i.received?'received':''}" data-id="${i.id}" aria-label="Bekijk ${escapeHTML(i.title)}, ${eur(i.price)}">${img(i)}<span class="tile-category">${escapeHTML(i.category||'Varia')}</span><span class="tile-price">${eur(i.price)}</span>${i.received?'<span class="status">✓ Gekregen</span>':''}${publicMode&&i.reserved?`<span class="reserved-cover">${storedSecret(i.id)?'Door jou gereserveerd':'Gereserveerd'}</span>`:''}</button>`).join('')}</div>
+ <div class="gallery">${items.map(i=>`<button class="tile ${i.received?'received':''}" data-id="${i.id}" aria-label="Bekijk ${escapeHTML(i.title)}, ${eur(i.price)}">${img(i)}<span class="tile-category">${escapeHTML(i.category||'Varia')}</span><span class="tile-price">${eur(i.price)}</span>${i.received?'<span class="status">✓ Gekregen</span>':''}${!publicMode&&i.is_private?'<span class="private-mark">Privé</span>':''}${publicMode&&i.reserved?`<span class="reserved-cover">${storedSecret(i.id)?'Door jou gereserveerd':'Gereserveerd'}</span>`:''}</button>`).join('')}</div>
  ${!items.length?`<div class="empty"><div class="empty-icon">${icon('gift')}</div><h2>Joke heeft geen inspiratie meer</h2><p>${state.received?'Nog geen gekregen cadeaus in deze prijsklasse.':'Even geduld nog'}</p>${!publicMode?'<button class="secondary" id="emptyAdd">Cadeau toevoegen</button>':''}</div>`:''}
  ${!publicMode?`<button class="fab" id="add" aria-label="Cadeau toevoegen">${icon('plus')}<span>Nieuw cadeau</span></button>`:''}
  </main>`;
+ app.querySelector('#categoryFilter').onchange=e=>{state.category=e.target.value;render()};
  app.querySelector('#sortOrder').onchange=e=>{state.sort=e.target.value;render()};
  app.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{state.filter=+b.dataset.filter;render()});
  app.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>detail(state.items.find(i=>i.id===b.dataset.id)));
@@ -135,7 +137,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal(document.
 function head(title){return `<div class="sheet-head"><h2>${title}</h2><button class="close" aria-label="Sluiten" data-close>×</button></div>`}
 function detail(item){
  const publicMode=state.public;
- const el=modal(`${head('Cadeaudetails')}<div class="detail-photo">${img(item,'hero')}</div><div class="detail-kicker">${escapeHTML(item.category||'Varia')}</div><div class="detail-heading"><h3 class="detail-title">${escapeHTML(item.title)}</h3><div class="price">${eur(item.price)}</div></div>${item.description?`<p class="description">${escapeHTML(item.description)}</p>`:''}${item.received?'<p class="detail-received">✓ Dit cadeau heb ik al gekregen</p>':''}<div class="buttons detail-actions">${item.shop_url?`<a class="primary" href="${escapeHTML(safeUrl(item.shop_url))}" target="_blank" rel="noopener noreferrer">Bekijk in webshop ${icon('arrow')}</a>`:''}${publicMode?item.received?'<button class="secondary" disabled>Reeds gekregen</button>':item.reserved?(storedSecret(item.id)?'<button class="secondary" id="cancelReserve">Mijn reservering annuleren</button><button class="secondary" id="copyCancel">Annulatielink kopiëren</button>':'<button class="secondary" disabled>Al gereserveerd</button>'):'<button class="primary" id="reserve">Reserveer dit cadeau</button>':`<button class="secondary" id="edit">${icon('edit')} Bewerken</button>`}</div>`);
+ const el=modal(`${head('Cadeaudetails')}<div class="detail-photo">${img(item,'hero')}</div><div class="detail-kicker">${escapeHTML(item.category||'Varia')}</div><div class="detail-heading"><h3 class="detail-title">${escapeHTML(item.title)}</h3><div class="price">${eur(item.price)}</div></div>${item.description?`<p class="description">${escapeHTML(item.description)}</p>`:''}${item.received?'<p class="detail-received">✓ Dit cadeau heb ik al gekregen</p>':''}${!publicMode&&item.is_private?'<p class="detail-private">🔒 Alleen zichtbaar voor jou</p>':''}<div class="buttons detail-actions">${item.shop_url?`<a class="primary" href="${escapeHTML(safeUrl(item.shop_url))}" target="_blank" rel="noopener noreferrer">Bekijk in webshop ${icon('arrow')}</a>`:''}${publicMode?item.received?'<button class="secondary" disabled>Reeds gekregen</button>':item.reserved?(storedSecret(item.id)?'<button class="secondary" id="cancelReserve">Mijn reservering annuleren</button><button class="secondary" id="copyCancel">Annulatielink kopiëren</button>':'<button class="secondary" disabled>Al gereserveerd</button>'):'<button class="primary" id="reserve">Reserveer dit cadeau</button>':`<button class="secondary" id="edit">${icon('edit')} Bewerken</button>`}</div>`);
  if(publicMode&&!item.reserved&&!item.received)el.querySelector('#reserve').onclick=()=>{closeModal(el);reserve(item)};
  if(publicMode&&item.reserved&&storedSecret(item.id)){
    el.querySelector('#cancelReserve').onclick=()=>{closeModal(el);confirmCancel(item.id,storedSecret(item.id))};
@@ -194,6 +196,7 @@ function edit(item={}){
  <div class="field"><label for="title">Naam <span class="required">*</span></label><input id="title" required maxlength="150" placeholder="Welk cadeau wil je?" value="${escapeHTML(item.title||'')}"></div>
  <div class="field-row"><div class="field"><label for="price">Prijs (€) <span class="required">*</span></label><input type="number" id="price" required min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="0,00" value="${item.price??''}"></div><div class="field"><label for="category">Categorie</label><select id="category" required>${categories.map(c=>`<option value="${c}" ${c===(categories.includes(item.category)?item.category:'Varia')?'selected':''}>${c}</option>`).join('')}</select></div></div>
  <div class="field"><label for="description">Beschrijving <span class="optional">optioneel</span></label><textarea id="description" maxlength="1500" placeholder="Een detail, maat, kleur of andere informatie…">${escapeHTML(item.description||'')}</textarea></div>
+ <label class="private-toggle"><input type="checkbox" id="is_private" ${item.is_private?'checked':''}><span><strong>Voorlopig privé</strong><small>Niet zichtbaar via mijn gedeelde verlanglijst.</small></span></label>
  ${editing?`<label class="received-toggle"><input type="checkbox" id="received" ${item.received?'checked':''}><span>Dit cadeau heb ik al gekregen</span></label>`:''}
  <div class="buttons form-actions"><button class="primary" type="submit">${editing?'Wijzigingen bewaren':'Cadeau toevoegen'} ${icon('arrow')}</button>${editing?'<button class="danger" type="button" id="delete">Cadeau verwijderen</button>':''}</div></form>`);
  const methods=el.querySelectorAll('[data-method]');
@@ -202,7 +205,7 @@ function edit(item={}){
  if(!editing)selectMethod('link');else {el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false}
  el.querySelector('#fetchmeta').onclick=async()=>{const url=el.querySelector('#shop_url').value;if(!safeUrl(url)||!url.trim().toLowerCase().startsWith('https://'))return alertUser('Plak eerst een geldige HTTPS-productlink.');const btn=el.querySelector('#fetchmeta');btn.disabled=true;btn.textContent='Ophalen…';try{const meta=await api('metadata',{url});if(meta.title)el.querySelector('#title').value=meta.title;if(meta.description)el.querySelector('#description').value=meta.description;if(meta.price!==null&&meta.price!==undefined)el.querySelector('#price').value=meta.price;if(meta.image){image=safeUrl(meta.image); el.querySelector('#imagePreview').innerHTML=`<img src="${escapeHTML(image)}" class="preview" alt="Productfoto">`}el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false;alertUser(meta.partial ? 'Een deel van de productgegevens is ingevuld. Vul ontbrekende velden zelf aan.' : 'Productgegevens ingevuld. Controleer de prijs en foto nog even.')}catch(err){el.querySelector('#linkField').hidden=false;el.querySelector('#photoField').hidden=false;alertUser(err.message)}finally{btn.disabled=false;btn.textContent='Ophalen'}};
  el.querySelector('#upload').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)||file.size>3_000_000)return alertUser('Gebruik een afbeelding van maximaal 3 MB.');image=await new Promise((ok,fail)=>{let reader=new FileReader();reader.onload=()=>ok(reader.result);reader.onerror=fail;reader.readAsDataURL(file)});el.querySelector('#imagePreview').innerHTML=`<img src="${image}" class="preview" alt="Foto van cadeau">`};
- el.querySelector('#itemForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('items/save',{id:item.id,title:el.querySelector('#title').value,description:el.querySelector('#description').value,price:el.querySelector('#price').value,category:el.querySelector('#category').value,shop_url:el.querySelector('#shop_url').value,image,received:!!el.querySelector('#received')?.checked});closeModal(el);await reload();alertUser('Cadeau bewaard!')}catch(err){alertUser(err.message)}finally{b.disabled=false}};
+ el.querySelector('#itemForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('items/save',{id:item.id,title:el.querySelector('#title').value,description:el.querySelector('#description').value,price:el.querySelector('#price').value,category:el.querySelector('#category').value,shop_url:el.querySelector('#shop_url').value,image,received:!!el.querySelector('#received')?.checked,is_private:el.querySelector('#is_private').checked});closeModal(el);await reload();alertUser('Cadeau bewaard!')}catch(err){alertUser(err.message)}finally{b.disabled=false}};
  if(editing)el.querySelector('#delete').onclick=async()=>{if(!confirm('Dit cadeau definitief verwijderen?'))return;try{await api('items/delete',{id:item.id});closeModal(el);await reload();alertUser('Cadeau verwijderd')}catch(err){alertUser(err.message)}}
 }
 
@@ -211,15 +214,16 @@ function showResetPassword(){
  const el=modal(`${head('Nieuw wachtwoord')}<p class="description">Kies een nieuw wachtwoord van minstens 10 tekens.</p><form id="resetForm"><div class="field"><label for="newpass">Nieuw wachtwoord</label><input id="newpass" type="password" minlength="10" autocomplete="new-password" required></div><button type="submit" class="primary">Wachtwoord bewaren</button></form>`);
  el.querySelector('#resetForm').onsubmit=async e=>{e.preventDefault();try{check(await db.auth.updateUser({password:el.querySelector('#newpass').value}));closeModal(el);alertUser('Je wachtwoord is aangepast.')}catch(err){alertUser(err.message)}};
 }
-function settings(){let el=modal(`${head('Instellingen')}<div class="section-title">Ingelogd als</div><p>${escapeHTML(state.user.email)}</p><p class="form-hint">Versie 2.2.0</p><button class="secondary logout" id="logout">Uitloggen</button>`);el.querySelector('#logout').onclick=async()=>{await api('logout',{});state.user=null;state.items=[];closeModal(el);render()}}
+function settings(){let el=modal(`${head('Instellingen')}<div class="section-title">Ingelogd als</div><p>${escapeHTML(state.user.email)}</p><p class="form-hint">Versie 2.5.0</p><button class="secondary logout" id="logout">Uitloggen</button>`);el.querySelector('#logout').onclick=async()=>{await api('logout',{});state.user=null;state.items=[];closeModal(el);render()}}
 db?.auth.onAuthStateChange((event)=>{if(event==='PASSWORD_RECOVERY')setTimeout(showResetPassword,0)});
 db?.auth.onAuthStateChange((event) => {
   if(event === 'SIGNED_IN' && !state.public && !state.user) {
     setTimeout(() => boot(), 0);
   }
 });
-boot(); // Geen serviceworker: GitHub Pages haalt updates rechtstreeks op.
+boot();
+// Network-first service worker: nooit privégegevens, config.js of Supabase-responses cachen.
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js', {updateViaCache:'none'}).catch(()=>{}));
+}
 
-// Remove obsolete offline shell to prevent old versions from persisting.
-if ("serviceWorker" in navigator) navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))).catch(()=>{});
-if ("caches" in window) caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith("wishly-")).map(k => caches.delete(k)))).catch(()=>{});

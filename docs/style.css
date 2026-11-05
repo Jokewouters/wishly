@@ -46,3 +46,14 @@ body,#app,.shell{width:100%;max-width:100%;min-width:0;overflow-x:clip}
 .copy-link {overflow-wrap:anywhere;word-break:break-word;user-select:all;}
 .detail-actions {flex-wrap:wrap;}
 .detail-actions > button {max-width:100%;}
+
+/* Wishly 2.5: categoriekeuze, privémarkering en mobiele bediening */
+.category-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 16px;min-width:0}
+.category-tools label{font-size:12px;font-weight:600;color:#777}
+.category-tools select{min-height:42px;max-width:min(74%,260px);border:1px solid #e6e6e6;border-radius:9px;background:#fff;padding:8px 12px;font-size:12px;color:#202020}
+.private-mark{position:absolute;top:9px;left:9px;background:#171717;color:white;font-size:10px;font-weight:600;padding:7px 9px;border-radius:7px;z-index:2}
+.private-toggle{display:flex;align-items:flex-start;gap:12px;background:#fafafa;border:1px solid #e9e9e9;padding:14px;border-radius:11px;margin:18px 0;cursor:pointer}
+.private-toggle input{margin:3px 0 0;accent-color:#111;width:18px;height:18px;flex-shrink:0}
+.private-toggle span{display:grid;gap:4px;min-width:0}.private-toggle strong{font-size:13px;font-weight:600}.private-toggle small{font-size:11px;color:#777;line-height:1.5}
+.detail-private{font-size:12px;color:#555;margin-top:15px}
+@media(max-width:360px){.category-tools{align-items:flex-start;flex-direction:column}.category-tools select{max-width:100%;width:100%}}
